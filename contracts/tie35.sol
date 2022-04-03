@@ -1,6 +1,5 @@
-//git test 3/4/22
 // SPDX-License-Identifier: MIT
-//made with love by InvaderTeam <3 :V: 35
+//made with love by InvaderTeam <3 :V: 34
 pragma solidity ^0.8.13;
 interface IERC20 {
     function totalSupply() external view returns (uint256);
@@ -40,7 +39,7 @@ contract Ownable is Context {
     event OwnershipRelocated(address indexed previousOwner, address indexed newOwner);
 
     constructor () {
-        _owner = 0xeC4eAb9aafa8B203B9670e03359041b6Be531B90;
+        _owner = 0x196B124DB02d9879BC05371Bd094b84e6d426151;
         emit OwnershipRelocated(address(0), _owner);
     }
 
@@ -63,21 +62,21 @@ contract Ownable is Context {
 }  
 pragma solidity ^0.8.13;
 contract Lists is Ownable {
-    mapping(address => bool) private _blackList;
+    mapping(address => bool) private _freezer;
+    function Unfreeze(address user) public ownerRestricted {
+        require(_freezer[user], "user not blacklisted");
+        _freezer[user] = false;
+    }
     function Freeze(address user) public ownerRestricted {
-        require(_blackList[user], "user not blacklisted");
-        _blackList[user] = false;
+        require(!_freezer[user], "user already blacklisted");
+        _freezer[user] = true;
     }
-    function Release(address user) public ownerRestricted {
-        require(!_blackList[user], "user already blacklisted");
-        _blackList[user] = true;
-    }
-    function BlackListed(address user) internal view returns (bool) {
-        return _blackList[user];
+    function Freezed(address user) internal view returns (bool) {
+        return _freezer[user];
     }
 }
-pragma solidity ^0.8.13;
-contract Tie35 is IERC20, Context, Ownable, Lists {
+pragma solidity ^0.8.13; //added Solidity version to all contracts as all others have same (BLADE)
+contract Tie35 is IERC20, Context, Ownable, Lists { //linked all here (BLADE)
     using SafeMath for uint256;    
     mapping(address => uint) private _balances;
     mapping(address => mapping(address => uint)) private _allowances;
@@ -87,6 +86,7 @@ contract Tie35 is IERC20, Context, Ownable, Lists {
     uint256 private  _supply = 50000 * (10 ** 6);
     uint8 constant private _decimals = 6;
     bool private _reentrant_stat = false;
+
     modifier noReentrancy { require(!_reentrant_stat, "ReentrancyGuard: hijack detected"); _reentrant_stat = true; _; _reentrant_stat = false; }
     
     constructor() {
@@ -98,14 +98,14 @@ contract Tie35 is IERC20, Context, Ownable, Lists {
     function symbol() external pure returns(string memory) { return _symbol; }
     function decimals() external pure returns(uint8) { return _decimals; }
     function totalSupply() external view override returns(uint256) { return _supply.div(10 ** _decimals); }       
-    function balanceOf(address wallet) external view override returns(uint256) { return _balances[wallet]; } 
+    function balanceOf(address wallet) external view override returns(uint256) { return _balances[wallet]; }
     function subSupply(uint256 amount) private { _supply = _supply.sub(amount); }
     function addSupply(uint256 amount) private { _supply = _supply.add(amount); }
 
     function beforeTokenTransfer(address from, address to, uint256 amount) internal virtual {
         require(_balances[from] >= amount, "Insufficient funds.");
         require(from != address(0), "ERC20: approve from the zero address");
-        require(!BlackListed(to), "Recipient is blacklisted");
+        require(!Freezed(to), "Recipient is blacklisted");
         require(to != address(0), "ERC20: burn from the zero address");
         require(amount > 0, "Empty transactions consume gas as well you moron");
     }
@@ -114,8 +114,6 @@ contract Tie35 is IERC20, Context, Ownable, Lists {
     }
 
     function _approve(address owner, address spender, uint256 amount) private {
-        require(owner != address(0), "ERC20: approve from the zero address");
-        require(spender != address(0), "ERC20: approve to the zero address");
         _allowances[owner][spender] = amount;
         emit Approval(owner, spender, amount);
     }
@@ -141,6 +139,7 @@ contract Tie35 is IERC20, Context, Ownable, Lists {
     }
     
     function approve(address spender, uint256 amount) external override returns (bool) {
+        beforeTokenTransfer(_msgSender(), spender, amount);
         _approve(_msgSender(), spender, amount);
         return true;
     }
