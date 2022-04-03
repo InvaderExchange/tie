@@ -1,6 +1,6 @@
-//git test
+//git test 3/4/22
 // SPDX-License-Identifier: MIT
-//made with love by InvaderTeam <3 :V: 34
+//made with love by InvaderTeam <3 :V: 35
 pragma solidity ^0.8.13;
 interface IERC20 {
     function totalSupply() external view returns (uint256);
