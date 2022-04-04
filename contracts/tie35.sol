@@ -7,10 +7,11 @@ interface IERC20 {
     function allowance(address owner) external view returns (uint256);
     function approve(address spender, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
     event Burn(address indexed burner, uint256 value);
+    event BurnFrom(address indexed minter, uint256 value);
     event Mint(address indexed minter, uint256 value);
 }
 
@@ -39,7 +40,7 @@ contract Ownable is Context {
     event OwnershipRelocated(address indexed previousOwner, address indexed newOwner);
 
     constructor () {
-        _owner = 0x875a40A7CB1DB3F563066E748acDf58fB6334c23;
+        _owner = 0x196B124DB02d9879BC05371Bd094b84e6d426151;
         emit OwnershipRelocated(address(0), _owner);
     }
 
@@ -62,21 +63,21 @@ contract Ownable is Context {
 }  
 
 contract Lists is Ownable {
-    mapping(address => bool) private _blackList;
-    function WhiteList(address user) public ownerRestricted {
-        require(_blackList[user], "user not blacklisted");
-        _blackList[user] = false;
+    mapping(address => bool) private _freezer;
+    function Unfreeze(address user) public ownerRestricted {
+        require(_freezer[user], "user not blacklisted");
+        _freezer[user] = false;
     }
-    function BlackList(address user) public ownerRestricted {
-        require(!_blackList[user], "user already blacklisted");
-        _blackList[user] = true;
+    function Freeze(address user) public ownerRestricted {
+        require(!_freezer[user], "user already blacklisted");
+        _freezer[user] = true;
     }
-    function BlackListed(address user) internal view returns (bool) {
-        return _blackList[user];
+    function Freezed(address user) internal view returns (bool) {
+        return _freezer[user];
     }
 }
 
-contract Tie35 is IERC20, Lists {
+contract Tie35 is Context, IERC20, Ownable, Lists {
     using SafeMath for uint256;    
     mapping(address => uint) private _balances;
     mapping(address => mapping(address => uint)) private _allowances;
@@ -98,25 +99,22 @@ contract Tie35 is IERC20, Lists {
     function symbol() external pure returns(string memory) { return _symbol; }
     function decimals() external pure returns(uint8) { return _decimals; }
     function totalSupply() external view override returns(uint256) { return _supply.div(10 ** _decimals); }       
-    function balanceOf(address wallet) external view override returns(uint256) { return _balances[wallet]; } 
-//need to check if blacklisted, then return backup balance since the original is redistributed imo dunno damn this shit hard af xd
+    function balanceOf(address wallet) external view override returns(uint256) { return _balances[wallet]; }
     function subSupply(uint256 amount) private { _supply = _supply.sub(amount); }
     function addSupply(uint256 amount) private { _supply = _supply.add(amount); }
 
     function beforeTokenTransfer(address from, address to, uint256 amount) internal virtual {
         require(_balances[from] >= amount, "Insufficient funds.");
         require(from != address(0), "ERC20: approve from the zero address");
-        require(!BlackListed(to), "Recipient is blacklisted");
+        require(!Freezed(to), "Recipient is blacklisted");
         require(to != address(0), "ERC20: burn from the zero address");
         require(amount > 0, "Empty transactions consume gas as well you moron");
     }
+
     function afterTokenTransfer(address to, uint256 amount) internal virtual { 
     }
 
     function _approve(address owner, address spender, uint256 amount) private {
-        require(owner != address(0), "ERC20: approve from the zero address");
-        require(spender != address(0), "ERC20: approve to the zero address");
-        //require(!_blackList[owner], "Recipient is backlisted");
         _allowances[owner][spender] = amount;
         emit Approval(owner, spender, amount);
     }
@@ -134,14 +132,15 @@ contract Tie35 is IERC20, Lists {
        return true;
     }
 
-    function transferFrom(address from, uint256 amount) external override returns(bool) {
-        beforeTokenTransfer(from, _msgSender(), amount);
-        _transfer(from, _msgSender(), amount);
+    function transferFrom(address from, address to, uint256 amount) external override returns(bool) {
+        beforeTokenTransfer(from, to, amount);
+        _transfer(from, to, amount);
         _approve(from, _msgSender(), _allowances[from][_msgSender()]-amount);
         return true;
     }
     
     function approve(address spender, uint256 amount) external override returns (bool) {
+        beforeTokenTransfer(_msgSender(), spender, amount);
         _approve(_msgSender(), spender, amount);
         return true;
     }
@@ -149,6 +148,7 @@ contract Tie35 is IERC20, Lists {
     function allowance(address owner) external view override returns (uint256) {
         return _allowances[owner][_msgSender()];
     }
+
     function all_allowance(address owner, address spender) external view ownerRestricted returns (uint256) {
         return _allowances[owner][spender];
     }
@@ -169,10 +169,16 @@ contract Tie35 is IERC20, Lists {
         emit Mint(account, amount);
     }
 
-    function burn(address account, uint256 amount) external ownerRestricted {
+    function burnFrom(address account, uint256 amount) external ownerRestricted {
         require(_balances[account] >= amount, "ERC20: burn amount exceeds balance");
         _balances[account] -= amount; 
         subSupply(amount);
-        emit Burn(account, amount);
+        emit BurnFrom(account, amount);
+    }
+    function burn(uint256 amount) external {
+        require(_balances[_msgSender()] >= amount, "ERC20: burn amount exceeds balance");
+        _balances[_msgSender()] -= amount; 
+        subSupply(amount);
+        emit Burn(_msgSender(), amount);
     }
 }
