@@ -10,8 +10,8 @@ interface IERC20 {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
-    event Burn(address indexed burner, uint256 value);
-    event BurnFrom(address indexed minter, uint256 value);
+    event Burn(address indexed burner, uint256 value); //changed indexed minter to burner (BLADE) 4.4.22
+    event BurnFrom(address indexed burner, uint256 value);
     event Mint(address indexed minter, uint256 value);
 }
 
@@ -76,6 +76,7 @@ contract Lists is Ownable {
         return _freezer[user];
     }
 }
+
 
 contract Tie35 is Context, IERC20, Ownable, Lists {
     using SafeMath for uint256;    
@@ -182,3 +183,112 @@ contract Tie35 is Context, IERC20, Ownable, Lists {
         emit Burn(_msgSender(), amount);
     }
 }
+
+contract TieStakingRewards is Tie35 {
+    using SafeMath for uint256;
+
+    /* ========== STATE VARIABLES ========== */
+
+    IERC20 public rewardsToken;
+    IERC20 public stakingToken;
+    uint256 public periodFinish = 0;
+    uint256 public rewardRate = 5;
+    uint256 public rewardsDuration = 2 hours;
+    uint256 public lastUpdateTime;
+    uint256 public rewardPerTokenStored;
+
+    mapping(address => uint256) public userRewardPerTokenPaid;
+    mapping(address => uint256) public rewards;
+
+    uint256 private _totalSupply;
+    mapping(address => uint256) private _balances;
+
+    /* ========== CONSTRUCTOR ========== */
+
+/**    constructor(
+        address _owner,
+        address _rewardsDistribution,
+        address _rewardsToken,
+        address _stakingToken
+    ) public owner(_owner) {
+        rewardsToken = IERC20(_rewardsToken);
+        stakingToken = IERC20(_stakingToken);
+        //rewardsDistribution = _rewardsDistribution;
+    }
+*/
+    constructor(
+//        address _owner,
+//        address _rewardsDistribution,
+        address _rewardsToken,
+        address _stakingToken
+    ) {
+        
+        stakingToken = IERC20(_stakingToken);
+        rewardsToken = IERC20(_rewardsToken);
+    }
+
+    function rewardPerToken() public view returns (uint) {
+        if (_totalSupply == 0) {
+            return rewardPerTokenStored;
+        }
+        return
+            rewardPerTokenStored +
+            (((block.timestamp - lastUpdateTime) * rewardRate * 1e18) / _totalSupply);
+    }
+
+    function earned(address account) public view returns (uint) {
+        return
+            ((_balances[account] *
+                (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18) +
+            rewards[account];
+    }
+
+    modifier updateReward(address account) {
+        rewardPerTokenStored = rewardPerToken();
+        lastUpdateTime = block.timestamp;
+
+        rewards[account] = earned(account);
+        userRewardPerTokenPaid[account] = rewardPerTokenStored;
+        _;
+    }
+
+    function stake(uint _amount) external updateReward(msg.sender) {
+        _totalSupply += _amount;
+        _balances[msg.sender] += _amount;
+        stakingToken.transferFrom(msg.sender, address(this), _amount);
+    }
+
+    function withdraw(uint _amount) external updateReward(msg.sender) {
+        _totalSupply -= _amount;
+        _balances[msg.sender] -= _amount;
+        stakingToken.transfer(msg.sender, _amount);
+    }
+
+    function getReward() external updateReward(msg.sender) {
+        uint reward = rewards[msg.sender];
+        rewards[msg.sender] = 0;
+        rewardsToken.transfer(msg.sender, reward);
+    }
+}
+/**
+interface IERC20 {
+    function totalSupply() external view returns (uint);
+
+    function balanceOf(address account) external view returns (uint);
+
+    function transfer(address recipient, uint amount) external returns (bool);
+
+    function allowance(address owner, address spender) external view returns (uint);
+
+    function approve(address spender, uint amount) external returns (bool);
+
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint amount
+    ) external returns (bool);
+
+    event Transfer(address indexed from, address indexed to, uint value);
+    event Approval(address indexed owner, address indexed spender, uint value);
+}
+*/
