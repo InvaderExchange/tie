@@ -10,8 +10,8 @@ interface IERC20 {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
-    event Burn(address indexed burner, uint256 value); //changed indexed minter to burner (BLADE) 4.4.22
-    event BurnFrom(address indexed burner, uint256 value);
+    event Burn(address indexed burner, uint256 value);
+    event BurnFrom(address indexed minter, uint256 value);
     event Mint(address indexed minter, uint256 value);
 }
 
@@ -26,6 +26,13 @@ library SafeMath {
     function mul(uint256 a, uint256 b) internal pure returns (uint256) { if (a == 0) return 0; uint256 c = a * b; require(c / a == b, "SafeMath: multiplication overflow"); return c; }
     function div(uint256 a, uint256 b) internal pure returns (uint256) { require(b > 0, "SafeMath: division by zero"); return a / b; }
     function mod(uint256 a, uint256 b) internal pure returns (uint256) { require(b > 0, "SafeMath: modulo by zero"); return a % b; }
+    function ceil(uint256 a, uint256 m) internal pure returns (uint256) { uint256 c = add(a,m); uint256 d = sub(c,1); return mul(div(d,m),m); }
+}
+
+contract ReentrancyGuard {
+    bool private _reentrant_stat = false;
+
+    modifier noReentrancy { require(!_reentrant_stat, "ReentrancyGuard: hijack detected"); _reentrant_stat = true; _; _reentrant_stat = false; }
 }
 
 contract Context {
@@ -40,7 +47,7 @@ contract Ownable is Context {
     event OwnershipRelocated(address indexed previousOwner, address indexed newOwner);
 
     constructor () {
-        _owner = 0x196B124DB02d9879BC05371Bd094b84e6d426151;
+        _owner = 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4;
         emit OwnershipRelocated(address(0), _owner);
     }
 
@@ -62,7 +69,7 @@ contract Ownable is Context {
     }
 }  
 
-contract Lists is Ownable {
+contract Lists is Ownable, ReentrancyGuard {
     mapping(address => bool) private _freezer;
     function Unfreeze(address user) public ownerRestricted {
         require(_freezer[user], "user not blacklisted");
@@ -77,8 +84,7 @@ contract Lists is Ownable {
     }
 }
 
-
-contract Tie35 is Context, IERC20, Ownable, Lists {
+contract Tie is IERC20, Lists {
     using SafeMath for uint256;    
     mapping(address => uint) private _balances;
     mapping(address => mapping(address => uint)) private _allowances;
@@ -87,9 +93,6 @@ contract Tie35 is Context, IERC20, Ownable, Lists {
     string constant private _symbol = "TIE35";
     uint256 private  _supply = 50000 * (10 ** 6);
     uint8 constant private _decimals = 6;
-    bool private _reentrant_stat = false;
-
-    modifier noReentrancy { require(!_reentrant_stat, "ReentrancyGuard: hijack detected"); _reentrant_stat = true; _; _reentrant_stat = false; }
     
     constructor() {
         _balances[owner()] = _supply;
@@ -111,7 +114,6 @@ contract Tie35 is Context, IERC20, Ownable, Lists {
         require(to != address(0), "ERC20: burn from the zero address");
         require(amount > 0, "Empty transactions consume gas as well you moron");
     }
-
     function afterTokenTransfer(address to, uint256 amount) internal virtual { 
     }
 
@@ -128,12 +130,12 @@ contract Tie35 is Context, IERC20, Ownable, Lists {
         afterTokenTransfer(to, amount);
     }
 
-    function transfer(address to, uint256 amount) external override returns(bool) {
+    function transfer(address to, uint256 amount) public override returns(bool) {
        _transfer(_msgSender(), to, amount);
        return true;
     }
 
-    function transferFrom(address from, address to, uint256 amount) external override returns(bool) {
+    function transferFrom(address from, address to, uint256 amount) public override returns(bool) {
         beforeTokenTransfer(from, to, amount);
         _transfer(from, to, amount);
         _approve(from, _msgSender(), _allowances[from][_msgSender()]-amount);
@@ -149,7 +151,6 @@ contract Tie35 is Context, IERC20, Ownable, Lists {
     function allowance(address owner) external view override returns (uint256) {
         return _allowances[owner][_msgSender()];
     }
-
     function all_allowance(address owner, address spender) external view ownerRestricted returns (uint256) {
         return _allowances[owner][spender];
     }
@@ -184,111 +185,125 @@ contract Tie35 is Context, IERC20, Ownable, Lists {
     }
 }
 
-contract TieStakingRewards is Tie35 {
+
+contract Stake is Ownable, ReentrancyGuard {
     using SafeMath for uint256;
+    uint256 public totalStakes = 0;
+    //uint256 private stakingFee = 1;
+    //uint256 private unstakingFee = 3;
+    address private TieActual = 0xd9145CCE52D386f254917e481eB44e9943F39138;
+    // uint256 private totalFeed = 0;
 
-    /* ========== STATE VARIABLES ========== */
+    uint private rewardRatioTier1 = 1; //0.1%/hour more min for now, test purpose
+    uint private rewardRatioTier2 = 3;
+    uint private rewardRatioTier3 = 7;
 
-    IERC20 public rewardsToken;
-    IERC20 public stakingToken;
-    uint256 public periodFinish = 0;
-    uint256 public rewardRate = 5;
-    uint256 public rewardsDuration = 2 hours;
-    uint256 public lastUpdateTime;
-    uint256 public rewardPerTokenStored;
+    uint private timeLimitTier1 = 1; // 1, 2, 3 mins
+    uint private timeLimitTier2 = 2;
+    uint private timeLimitTier3 = 3;
 
-    mapping(address => uint256) public userRewardPerTokenPaid;
-    mapping(address => uint256) public rewards;
-
-    uint256 private _totalSupply;
-    mapping(address => uint256) private _balances;
-
-    /* ========== CONSTRUCTOR ========== */
-
-/**    constructor(
-        address _owner,
-        address _rewardsDistribution,
-        address _rewardsToken,
-        address _stakingToken
-    ) public owner(_owner) {
-        rewardsToken = IERC20(_rewardsToken);
-        stakingToken = IERC20(_stakingToken);
-        //rewardsDistribution = _rewardsDistribution;
-    }
-*/
-    constructor(
-//        address _owner,
-//        address _rewardsDistribution,
-        address _rewardsToken,
-        address _stakingToken
-    ) {
-        
-        stakingToken = IERC20(_stakingToken);
-        rewardsToken = IERC20(_rewardsToken);
+    struct USER{
+        uint256 stakedTokens;
+        uint256 creationTime;
+        uint256 lastClaim;
+        uint256 totalEarned;
+        uint256 lockedTime;
     }
 
-    function rewardPerToken() public view returns (uint) {
-        if (_totalSupply == 0) {
-            return rewardPerTokenStored;
+    mapping(address => USER) internal stakers;
+
+    event Staked(address staker, uint256 tokens);
+    event Unstaked(address staker, uint256 tokens);
+
+    event ClaimedReward(address staker, uint256 reward);
+
+    /*constructor() { //pretty useless now, maybe will find a use later idk
+    }*/
+
+    function claimRewardStake(address user) external returns(uint256){
+    }
+
+    function currentRewardStake(address user) public view returns(uint256){
+        //gotta check and calc the time, maybe add a limiter to let people stake more than that
+        //than calc the percentage of tokens they have on the total tokens in the pool in totalStakes var
+        //so we can multiply that value for stakingRewardRatio, need to understand if set reward per hour or day
+        //when this will be done we will testing how it behaves, if good than adapt to claimRewardStake
+        if(stakers[user].stakedTokens > 0){
+            uint256 timeStaked = (block.timestamp - stakers[user].lastClaim) / 60;
+
+            uint256 reward = onePercent(stakers[user].stakedTokens);
+
+            if(stakers[_msgSender()].lockedTime <= timeLimitTier1){
+                reward = (reward * (rewardRatioTier1 * timeStaked)) / 10;
+            }
+            else if(stakers[_msgSender()].lockedTime <= timeLimitTier2){
+                reward = (reward * (rewardRatioTier2 * timeStaked)) / 10;
+            }
+            else if(stakers[_msgSender()].lockedTime <= timeLimitTier3 && stakers[_msgSender()].lockedTime > timeLimitTier3){
+                reward = (reward * (rewardRatioTier3 * timeStaked)) / 10;
+            }
+
+            reward += stakers[_msgSender()].totalEarned;
+            
+            return reward;
+
+            // uint256 StakedOnTotal = (totalStakes / stakers[user].stakedTokens) * 10000;
+
+            // return ((timeStaked * StakedOnTotal) * stakingRewardRatio) / 10; //wtf am I doing .-.
+            // return (timeStaked * StakedOnTotal) / 10000;
         }
-        return
-            rewardPerTokenStored +
-            (((block.timestamp - lastUpdateTime) * rewardRate * 1e18) / _totalSupply);
+        else{
+            return 0;
+        }
     }
 
-    function earned(address account) public view returns (uint) {
-        return
-            ((_balances[account] *
-                (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18) +
-            rewards[account];
+    function stake(uint256 tokens, uint256 lockTime) external noReentrancy { //lockTime is native in minute for this version, no need for conversions
+        require(IERC20(TieActual).transferFrom(_msgSender(), address(this), tokens), "Tokens cannot be transfered from your account");
+        //uint256 _stackingFee = onePercent(tokens) * stakingFee;
+        //totalFeed += _stackingFee;
+        //uint256 feeDeductedTokens = tokens - _stackingFee;
+        uint256 currStake = stakers[_msgSender()].stakedTokens;
+        
+        stakers[_msgSender()].totalEarned += currentRewardStake(_msgSender()); //this will be needed to add the tokens made with the staked tokens so far
+        stakers[_msgSender()].stakedTokens += tokens;
+
+        if(currStake == 0){
+            stakers[_msgSender()].creationTime = block.timestamp;
+            stakers[_msgSender()].lastClaim = block.timestamp;
+            stakers[_msgSender()].lockedTime = lockTime;
+        }
+        else{
+            stakers[_msgSender()].lastClaim = block.timestamp;  // like this is needed to withdraw all the tokens before lock up for another stack of time
+        }
+
+        totalStakes += tokens;
+        emit Staked(_msgSender(), tokens);
+    }
+    
+    function withdrawStake(uint256 tokens) external payable noReentrancy {
+        require(stakers[_msgSender()].stakedTokens >= tokens && tokens > 0, "Invalid token amount to withdraw");
+        require((block.timestamp - stakers[_msgSender()].creationTime) / 60 >= stakers[_msgSender()].lockedTime, "your tokens are still locked");  // /60 means minutes
+        //uint256 _unstakingFee = onePercent(tokens) * unstakingFee;
+        //totalFeed += _unstakingFee;
+        //uint256 feeDeductedTokens = tokens - _unstakingFee;
+        require(IERC20(TieActual).transfer(_msgSender(), tokens), "Error in the un-stacking process, tokens not transferred");
+        stakers[_msgSender()].totalEarned += currentRewardStake(_msgSender());
+        stakers[_msgSender()].lastClaim = block.timestamp;
+        stakers[_msgSender()].stakedTokens -= tokens;
+        totalStakes -= tokens;
+        emit Unstaked(_msgSender(), tokens);
     }
 
-    modifier updateReward(address account) {
-        rewardPerTokenStored = rewardPerToken();
-        lastUpdateTime = block.timestamp;
-
-        rewards[account] = earned(account);
-        userRewardPerTokenPaid[account] = rewardPerTokenStored;
-        _;
+    function onePercent(uint tokens) private pure returns (uint256){
+        uint256 rounded = tokens.ceil(100);  //from 0.7- need to try without and see if it works
+        return rounded.div(100);
+    }
+    
+    function stakeOf(address staker) external view returns (uint256){
+        return stakers[staker].stakedTokens;
     }
 
-    function stake(uint _amount) external updateReward(msg.sender) {
-        _totalSupply += _amount;
-        _balances[msg.sender] += _amount;
-        stakingToken.transferFrom(msg.sender, address(this), _amount);
-    }
-
-    function withdraw(uint _amount) external updateReward(msg.sender) {
-        _totalSupply -= _amount;
-        _balances[msg.sender] -= _amount;
-        stakingToken.transfer(msg.sender, _amount);
-    }
-
-    function getReward() external updateReward(msg.sender) {
-        uint reward = rewards[msg.sender];
-        rewards[msg.sender] = 0;
-        rewardsToken.transfer(msg.sender, reward);
+    function WatchClaimTimeMins(address staker) external view returns (uint256){
+        return (block.timestamp - stakers[staker].creationTime) / 60;
     }
 }
-/**
-interface IERC20 {
-    function totalSupply() external view returns (uint);
-
-    function balanceOf(address account) external view returns (uint);
-
-    function transfer(address recipient, uint amount) external returns (bool);
-
-    function allowance(address owner, address spender) external view returns (uint);
-
-    function approve(address spender, uint amount) external returns (bool);
-
-    function transferFrom(
-        address sender,
-        address recipient,
-        uint amount
-    ) external returns (bool);
-
-    event Transfer(address indexed from, address indexed to, uint value);
-    event Approval(address indexed owner, address indexed spender, uint value);
-}
-*/
